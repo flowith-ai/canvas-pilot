@@ -5,7 +5,7 @@ description: >
   read results, recall past work, and manage nodes. The canvas is a shared workspace visible in the
   browser; this skill gives you a live cursor on it. Use this skill whenever the user wants to interact
   with the canvas platform, asks to generate images or videos on canvas, mentions "canvas", "Neo",
-  "Agent Neo", "画布", wants to draw/create/generate visual content on the spatial canvas, references
+  "Agent Neo", wants to draw/create/generate visual content on the spatial canvas, references
   past canvas work, or says anything that implies operating on the canvas. Also triggers on /canvas-pilot.
 ---
 
@@ -53,7 +53,7 @@ This is the only rule. There is no table to consult.
 Use judgment, not ceremony.
 
 - **Does this feel like a continuation?** `search` for an existing `[Bot]` canvas → `switch` to it. Otherwise `create-canvas`.
-- **Does the request echo past work?** If so, `recall` to find it. If it's clearly fresh ("画5只猫"), just start.
+- **Does the request echo past work?** If so, `recall` to find it. If it's clearly fresh ("draw 5 cats"), just start.
 - **Choose mode by intent**: `text` for answers. `image` for visuals. `video` for clips. `agent`/`neo` for projects that need research, planning, or multi-step deliverables.
 - **Failure is signal**: `clean-failed`, switch model or simplify, then retry.
 
