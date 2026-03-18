@@ -288,9 +288,73 @@ function parseBotClient(rawArgs: string[]): {
 
 // ============ Browser open helper ============
 
+/**
+ * On macOS, detect if the default HTTPS handler is Safari.
+ * If so, find an installed Chromium-based browser to use instead
+ * (Safari blocks ws://127.0.0.1 from HTTPS pages — mixed content).
+ * Returns the app name to use with `open -a`, or null to use the default.
+ */
+let _macBrowserOverride: string | null | undefined // undefined = not checked yet
+function getMacBrowserOverride(): string | null {
+  if (process.platform !== "darwin") return null
+  if (_macBrowserOverride !== undefined) return _macBrowserOverride
+
+  const { execSync } = require("child_process")
+
+  // Check default browser via Launch Services
+  let isSafariDefault = false
+  try {
+    const out = execSync(
+      `defaults read com.apple.LaunchServices/com.apple.launchservices.secure LSHandlers 2>/dev/null`,
+      { encoding: "utf-8", timeout: 1000 },
+    )
+    // If no custom handler overrides https, Safari is the system default
+    // Look for an https handler that is NOT safari
+    const httpsSection = out.match(/LSHandlerURLScheme = https;[\s\S]*?LSHandlerRoleAll = "([^"]+)"/)?.[1]
+    isSafariDefault = !httpsSection || httpsSection.includes("safari")
+  } catch {
+    isSafariDefault = false // can't detect — assume non-Safari
+  }
+
+  if (!isSafariDefault) {
+    _macBrowserOverride = null
+    return null
+  }
+
+  // Safari is default — find a Chromium browser
+  const candidates = [
+    "Google Chrome",
+    "Google Chrome Canary",
+    "Chrome",
+    "Chromium",
+    "Microsoft Edge",
+    "Arc",
+    "Brave Browser",
+    "Opera",
+  ]
+  for (const app of candidates) {
+    if (existsSync(`/Applications/${app}.app`)) {
+      console.error(`Default browser is Safari (incompatible). Using ${app} instead.`)
+      _macBrowserOverride = app
+      return app
+    }
+  }
+
+  _macBrowserOverride = null
+  return null
+}
+
 async function openInBrowser(url: string) {
   const { spawnSync } = await import("child_process")
   if (process.platform === "darwin") {
+    if (url.startsWith("https://")) {
+      const override = getMacBrowserOverride()
+      if (override) {
+        const result = spawnSync("open", ["-a", override, url], { stdio: "ignore" })
+        if (result.status === 0) return
+        console.error(`Failed to launch ${override}, falling back to default browser`)
+      }
+    }
     spawnSync("open", [url], { stdio: "ignore" })
   } else if (process.platform === "win32") {
     // cmd.exe treats & | < > ^ as metacharacters; escape with ^ to prevent URL breakage
@@ -447,8 +511,9 @@ async function acquireSession(botClient = "other"): Promise<CanvasBotSession> {
       120_000,
     )
 
-    // Use WebSocket server instead of HTTP to avoid Safari mixed-content blocking.
-    // Safari blocks fetch("http://127.0.0.1:...") from HTTPS pages, but allows ws:// connections.
+    // Use WebSocket server instead of HTTP for the session handshake.
+    // Note: Safari blocks both fetch() and ws:// to 127.0.0.1 from HTTPS pages (mixed content).
+    // Safari is detected and rejected before reaching this point.
     const handleWsMessage = (
       ws: { send: (data: string) => void; close: () => void },
       raw: string | Buffer,
@@ -695,7 +760,22 @@ function tryAcquireSessionLock(): boolean {
   if (existsSync(SESSION_LOCK_FILE)) {
     try {
       const s = statSync(SESSION_LOCK_FILE)
-      if (Date.now() - s.mtimeMs < SESSION_LOCK_MAX_AGE_MS) return false // held by another process
+      if (Date.now() - s.mtimeMs < SESSION_LOCK_MAX_AGE_MS) {
+        // Check if the holding process is still alive
+        try {
+          const pid = parseInt(readFileSync(SESSION_LOCK_FILE, "utf-8").trim(), 10)
+          if (pid && pid !== process.pid) {
+            try {
+              process.kill(pid, 0) // signal 0 = check existence only
+              return false // process alive, lock valid
+            } catch {
+              console.error("Stale lock (process dead). Taking over...")
+            }
+          }
+        } catch {
+          return false // can't read PID, treat as held
+        }
+      }
     } catch {}
   }
   try {
