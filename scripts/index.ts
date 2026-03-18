@@ -572,9 +572,16 @@ async function main() {
   // ---- open ----
   if (cmd === "open") {
     const base = await getFlowithUrl()
-    const convId = args[1] || loadSession()?.activeConvId
+    const existing = loadSession()
+    const convId = args[1] || existing?.activeConvId
     const target = convId ? `${base}/conv/${convId}` : base
     await openInBrowser(target)
+    // Record browser open so ensureBrowserConnected() cooldown prevents duplicate tabs
+    if (existing) {
+      existing.lastBrowserOpenAt = new Date().toISOString()
+      if (args[1]) existing.activeConvId = args[1]
+      saveSession(existing)
+    }
     console.error(`Opened ${target}`)
     return
   }
