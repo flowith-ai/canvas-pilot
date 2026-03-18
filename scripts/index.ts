@@ -55,6 +55,7 @@ type BotAction = BotActionBase &
     | { type: "select_node"; nodeId: string }
     | { type: "deselect" }
     | { type: "submit"; value: string; files?: Array<{ url: string; name: string; type?: string }> }
+    | { type: "comment"; nodeId: string; text: string }
     | { type: "delete_node"; nodeId: string }
     | { type: "delete_nodes"; nodeIds: string[] }
     | { type: "read_node"; nodeId: string }
@@ -791,6 +792,11 @@ async function main() {
     }
     case "deselect": {
       requireCanvas(); action = { ...base, type: "deselect" }; channelName = canvasCh(); break
+    }
+    case "comment": {
+      if (!args[1]) { console.error("Error: comment requires nodeId."); process.exit(1) }
+      if (!args[2]) { console.error("Error: comment requires text."); process.exit(1) }
+      requireCanvas(); action = { ...base, type: "comment", nodeId: args[1], text: args[2] }; channelName = canvasCh(); break
     }
 
     // -- Canvas channel: submit (triggers the full generation pipeline) --

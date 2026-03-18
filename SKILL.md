@@ -144,6 +144,7 @@ bun $S --bot claude-code dream-init "ukiyo-e x cyberpunk"
 | `submit "text" [--image ...] [--wait[=sec]]` | Submit a generation |
 | `submit-batch "p1" "p2" ...` | N independent same-mode submits |
 | `read [nodeId \| --all]` | Read node content (browser memory) |
+| `comment <nodeId> "text"` | Move cursor to node + show comment label (30s fade) |
 | `delete <nodeId>` | Delete a node |
 | `delete-many <id1> <id2> ...` | Delete multiple nodes |
 
