@@ -292,10 +292,12 @@ function parseBotClient(rawArgs: string[]): {
  * On macOS, detect if the default HTTPS handler is Safari.
  * If so, find an installed Chromium-based browser to use instead
  * (Safari blocks ws://127.0.0.1 from HTTPS pages — mixed content).
- * Returns the app name to use with `open -a`, or null to use the default.
+ * Returns the app name to use with `open -a`, null if default is fine,
+ * or "SAFARI_ONLY" if Safari is default and no Chromium is available.
  */
+const SAFARI_ONLY = "SAFARI_ONLY" as const
 let _macBrowserOverride: string | null | undefined // undefined = not checked yet
-function getMacBrowserOverride(): string | null {
+function getMacBrowserOverride(): string | typeof SAFARI_ONLY | null {
   if (process.platform !== "darwin") return null
   if (_macBrowserOverride !== undefined) return _macBrowserOverride
 
@@ -340,8 +342,9 @@ function getMacBrowserOverride(): string | null {
     }
   }
 
-  _macBrowserOverride = null
-  return null
+  // Safari-only — no compatible browser found
+  _macBrowserOverride = SAFARI_ONLY
+  return SAFARI_ONLY
 }
 
 async function openInBrowser(url: string) {
@@ -349,6 +352,9 @@ async function openInBrowser(url: string) {
   if (process.platform === "darwin") {
     if (url.startsWith("https://")) {
       const override = getMacBrowserOverride()
+      if (override === SAFARI_ONLY) {
+        throw new BrowserConnectionError( "Safari is not supported")
+      }
       if (override) {
         const result = spawnSync("open", ["-a", override, url], { stdio: "ignore" })
         if (result.status === 0) return
