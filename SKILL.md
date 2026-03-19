@@ -30,9 +30,10 @@ Valid: `claude-code` | `codex` | `openclaw` | `cursor` | `opencode` | `flowithos
 
 The tree structure is not a log — it IS the thinking. Where you place a node is a creative decision.
 
-- **Chain** (A→B→C): Each step builds on the last. Use `submit --follow <nodeId>`.
-- **Branch** (A→B1, A→B2): Exploring alternatives. Use `submit` (no `--follow`).
+- **Chain** (A→B→C): Each step builds on the last. `submit --follow <A>` → `submit --follow <B>`.
+- **Branch** (A→B1, A→B2): Exploring alternatives FROM the same parent. `submit --follow <A>` for each. Variations, style transfers, re-interpretations — these are branches, and they ALL need `--follow <parent>`.
 - **Rewind** (branch from B, not C): `submit --follow <B's nodeId>` to go back.
+- **Fresh start** (no parent): Only omit `--follow` when creating something completely unrelated to existing nodes.
 
 One submit = one node = one idea. Never cram multiple ideas into one prompt.
 
@@ -106,7 +107,7 @@ bun $S recall "cyberpunk logo" --type image
 
 ### Presenting Results
 
-- **Image**: `![description](url)` — describe what you actually see, not what the prompt asked for.
+- **Image**: ALWAYS use `![description](url)` — never paste a raw URL. Describe what you actually see, not what the prompt asked for.
 - **Text/Agent**: print the content directly.
 - **Video**: `[Watch video](url)`.
 
