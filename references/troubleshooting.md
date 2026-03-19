@@ -23,6 +23,11 @@ Errors are returned as structured JSON to stdout (even on exit code 1):
 | `LOCKED` | Another action in progress or rate limited | Wait 2s, retry |
 | `Submit handler not available` | Not on a canvas page | Run `create-canvas` or `switch <id>` first |
 
+## Model Change During Generation
+
+`--wait` blocks the CLI. You cannot change the model mid-generation.
+Workaround: submit without `--wait`, then `read-db` to check results later.
+
 ## Rate Limits
 
 30 actions per 10 seconds (sliding window). Use `delete-many` instead of repeated `delete`.

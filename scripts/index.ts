@@ -933,6 +933,11 @@ async function ensureBrowserConnected(
   const ch = `bot_ctrl:${userId}`
   if (await quickPing(client, ch, session)) return
 
+  // Grace period: browser may be transitioning after a page navigation (e.g. switch_canvas).
+  // A brief retry avoids a false "not connected" that triggers a redundant browser open.
+  await new Promise(r => setTimeout(r, 2_000))
+  if (await quickPing(client, ch, session)) return
+
   // Decide: open browser or just wait (if we or another process already opened it recently)
   // session is passed by reference — in-process retries see the updated timestamp without re-reading the file.
   // saveSession() persists it so separate CLI invocations also respect the cooldown.
@@ -1220,7 +1225,22 @@ async function main() {
   // ---- open ----
   if (cmd === "open") {
     const existing = loadSession()
-    const convId = args[1] || existing?.activeConvId
+    const arg = args[1]
+
+    // Full URL mode: open directly in browser, preserving all query params (invitation links etc.)
+    if (arg && /^https?:\/\//i.test(arg)) {
+      await openInBrowser(arg)
+      if (existing) {
+        existing.lastBrowserOpenAt = new Date().toISOString()
+        const m = arg.match(/\/conv\/([0-9a-f-]{36})/i)
+        if (m) existing.activeConvId = m[1]
+        saveSession(existing)
+      }
+      console.error(`Opened ${arg} (full URL)`)
+      return
+    }
+
+    const convId = arg || existing?.activeConvId
 
     // If we have a session and a convId, try same-tab navigation via broadcast first
     if (existing && convId) {

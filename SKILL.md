@@ -55,9 +55,11 @@ Use judgment, not ceremony.
 - **Does this feel like a continuation?** `search` for an existing `[Bot]` canvas → `switch` to it. Otherwise `create-canvas`.
 - **Does the request echo past work?** If so, `recall` to find it. If it's clearly fresh ("draw 5 cats"), just start.
 - **Choose mode by intent**: `text` for answers. `image` for visuals. `video` for clips. `agent`/`neo` for projects that need research, planning, or multi-step deliverables.
+- **Default models**: Prefer `seedream-v4.5` for image, `gpt-4.1` for text. Always verify with `list-models <mode>` if unsure what's available — don't guess model names.
 - **Failure is signal**: `clean-failed`, switch model or simplify, then retry.
 - **Stay in place.** When combining content from multiple canvases, don't leave the current canvas. Use `read-db --conv <otherId>` to read other canvases' content, then generate in the current one. Never create a new canvas just to merge — work where you are.
 - **Navigate, don't open.** To move between canvases, use `switch`. `open` is only for bringing the browser to the foreground or launching it the first time. `open` will try same-tab SPA navigation automatically if the browser is already connected.
+- **Invitation links**: When the user sends a URL with `?` parameters (shared canvas link), use `open "<full-url>"` — do NOT extract the conv_id for `switch`. The query parameters contain the auth token required for access.
 
 ## Working with the Canvas
 
