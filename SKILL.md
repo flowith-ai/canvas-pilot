@@ -38,15 +38,14 @@ One submit = one node = one idea. Never cram multiple ideas into one prompt.
 
 ### Velocity
 
-**Start everything, then look.** When you have multiple independent things to make — 5 dogs, 3 poems, a mix of images and text — fire them all at once. Don't wait for one to finish before starting the next.
+**NEVER submit independent prompts one by one.** This is the single most common mistake. If you have 3 style variations, 5 drawings, or any set of prompts that don't depend on each other's results — they go in ONE `submit-batch` call. No exceptions.
 
 - Same mode, all independent → `submit-batch "p1" "p2" "p3"`
+- Variations from one parent → `submit-batch --follow <parentId> "variation1" "variation2" "variation3"`
 - Mixed modes → individual `submit` commands, no `--wait`
 - Then `read-db --full` to collect all results
 
-**Slow down only when the previous result changes what you do next.** If prompt B depends on seeing what prompt A produced, use `--wait` on A. If they're independent, don't wait.
-
-This is the only rule. There is no table to consult.
+**Slow down only when the previous result changes what you do next.** If prompt B depends on seeing what prompt A produced, use `--wait` on A. If they're independent, don't wait. That's the only rule.
 
 ### Before You Start
 
