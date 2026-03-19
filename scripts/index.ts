@@ -41,6 +41,8 @@ interface CanvasBotSession {
   createdAt: string
   expiresAt: string
   lastBrowserOpenAt?: string
+  browserOpenCount?: number
+  flowithUrl?: string
 }
 
 interface BotActionBase {
@@ -83,14 +85,14 @@ type BotAction = BotActionBase &
       }
     | { type: "recall_node"; convId: string; nodeId: string }
     | { type: "clean_failed"; convId: string }
+    | { type: "get_current_canvas"; includeTitle?: boolean }
     | { type: "set_mode"; mode: string }
     | { type: "set_model"; model: string }
-    | { type: "select_node"; nodeId: string }
-    | { type: "deselect" }
     | {
         type: "submit"
         value: string
         files?: Array<{ url: string; name: string; type?: string }>
+        follow?: string
       }
     | { type: "comment"; nodeId: string; text: string }
     | { type: "delete_node"; nodeId: string }
@@ -121,6 +123,7 @@ const QUICK_PING_MS = 3_000
 const BROWSER_OPEN_WAIT_MS = 25_000
 const BROWSER_POLL_MS = 2_000
 const BROWSER_OPEN_COOLDOWN_MS = 60_000
+const BROWSER_MAX_OPENS = 3 // Max auto-opens per session before giving up
 const VALID_MODES = new Set(["text", "image", "video", "agent", "neo"])
 
 // Input validation
@@ -347,8 +350,70 @@ function getMacBrowserOverride(): string | typeof SAFARI_ONLY | null {
   return SAFARI_ONLY
 }
 
+/**
+ * Try to find an existing Flowith tab in the browser and navigate it,
+ * instead of opening a new tab. Returns true if an existing tab was reused.
+ */
+function tryReuseExistingTab(url: string): boolean {
+  if (process.platform !== "darwin") return false
+  const { spawnSync } = require("child_process")
+
+  let origin: string
+  try {
+    origin = new URL(url).origin
+  } catch {
+    return false
+  }
+
+  // Determine which browser to target
+  const override = getMacBrowserOverride()
+  const browsers =
+    override && override !== SAFARI_ONLY
+      ? [override]
+      : ["Google Chrome", "Arc", "Brave Browser", "Microsoft Edge"]
+
+  for (const browser of browsers) {
+    // Use escaped values to prevent AppleScript injection
+    const safeOrigin = origin.replace(/\\/g, "\\\\").replace(/"/g, '\\"')
+    const safeUrl = url.replace(/\\/g, "\\\\").replace(/"/g, '\\"')
+    const script = [
+      `tell application "System Events"`,
+      `  if not (exists process "${browser}") then error "not running"`,
+      `end tell`,
+      `tell application "${browser}"`,
+      `  repeat with w in windows`,
+      `    set tabIdx to 0`,
+      `    repeat with t in tabs of w`,
+      `      set tabIdx to tabIdx + 1`,
+      `      try`,
+      `        if URL of t starts with "${safeOrigin}" then`,
+      `          set URL of t to "${safeUrl}"`,
+      `          set active tab index of w to tabIdx`,
+      `          set index of w to 1`,
+      `          activate`,
+      `          return`,
+      `        end if`,
+      `      end try`,
+      `    end repeat`,
+      `  end repeat`,
+      `end tell`,
+      `error "no match"`,
+    ].join("\n")
+    const result = spawnSync("osascript", ["-e", script], {
+      timeout: 3_000,
+      stdio: ["ignore", "pipe", "pipe"],
+    })
+    if (result.status === 0) return true
+  }
+  return false
+}
+
 async function openInBrowser(url: string) {
   const { spawnSync } = await import("child_process")
+
+  // On macOS, try to navigate an existing Flowith tab first (no new tab)
+  if (process.platform === "darwin" && tryReuseExistingTab(url)) return
+
   if (process.platform === "darwin") {
     if (url.startsWith("https://")) {
       const override = getMacBrowserOverride()
@@ -461,14 +526,23 @@ async function validateToken(session: CanvasBotSession): Promise<boolean> {
 // ============ Browser handshake: local WebSocket server receives session from frontend ============
 
 async function acquireSession(botClient = "other"): Promise<CanvasBotSession> {
+  const currentFlowithUrl = await getFlowithUrl()
   const existing = loadSession()
   if (existing) {
-    // Quick server-side token validation (catches revoked/expired tokens the JWT check misses)
-    const valid = await validateToken(existing)
-    if (valid) return existing
-    // Token rejected — clear stale session
-    deleteSessionFile()
-    console.error("Session token expired or revoked. Re-authenticating...")
+    // If FLOWITH_URL changed (e.g. switched to localhost), the browser at the
+    // new origin won't be logged in. Force re-auth so the user gets a proper
+    // login prompt instead of silent "browser not responding" failures.
+    if (existing.flowithUrl && existing.flowithUrl !== currentFlowithUrl) {
+      deleteSessionFile()
+      console.error(`Flowith URL changed (${existing.flowithUrl} → ${currentFlowithUrl}). Re-authenticating...`)
+    } else {
+      // Quick server-side token validation (catches revoked/expired tokens the JWT check misses)
+      const valid = await validateToken(existing)
+      if (valid) return existing
+      // Token rejected — clear stale session
+      deleteSessionFile()
+      console.error("Session token expired or revoked. Re-authenticating...")
+    }
   }
 
   // Lockfile guard: if another CLI process is already opening the browser, wait for it
@@ -531,8 +605,10 @@ async function acquireSession(botClient = "other"): Promise<CanvasBotSession> {
 
         if (msg.type === "not_logged_in") {
           ws.send(JSON.stringify({ ok: true }))
-          console.error(
-            "Not logged in yet. Please log in at the browser window — waiting for you...",
+          ws.close()
+          fail(
+            "You are not logged in. Please log in at the browser, then re-run this command.",
+            "NOT_LOGGED_IN",
           )
           return
         }
@@ -550,6 +626,7 @@ async function acquireSession(botClient = "other"): Promise<CanvasBotSession> {
             ...sessionData,
             sessionSecret: crypto.randomUUID(),
             lastBrowserOpenAt: new Date().toISOString(),
+            flowithUrl: currentFlowithUrl,
           }
           saveSession(session)
           ws.send(JSON.stringify({ ok: true }))
@@ -865,13 +942,22 @@ async function ensureBrowserConnected(
     now - new Date(session.lastBrowserOpenAt).getTime() <
       BROWSER_OPEN_COOLDOWN_MS
 
+  const openCount = session.browserOpenCount || 0
   if (!recentlyOpened) {
+    if (openCount >= BROWSER_MAX_OPENS) {
+      throw new BrowserConnectionError(
+        `Already opened the browser ${BROWSER_MAX_OPENS} times without a successful connection.\n\n` +
+          "Please make sure a Flowith tab is open and loaded, then re-run this command.",
+        "TOO_MANY_OPENS",
+      )
+    }
     const base = await getFlowithUrl()
     const target = session.activeConvId
       ? `${base}/conv/${session.activeConvId}`
       : base
     console.error("Browser not connected. Opening Flowith...")
     await openInBrowser(target)
+    ;session.browserOpenCount = openCount + 1
     session.lastBrowserOpenAt = new Date().toISOString()
     saveSession(session)
   } else {
@@ -884,6 +970,10 @@ async function ensureBrowserConnected(
     await new Promise(r => setTimeout(r, BROWSER_POLL_MS))
     await registerWithFrontend(client, session, userId, botClient)
     if (await quickPing(client, ch, session)) {
+      if (session.browserOpenCount) {
+        ;session.browserOpenCount = 0
+        saveSession(session)
+      }
       console.error("Connected!")
       return
     }
@@ -931,7 +1021,40 @@ async function connectAndExecute(
       await client.connect()
       await registerWithFrontend(client, session, userId, botClient)
       await ensureBrowserConnected(client, session, userId, botClient)
-      if (!channelName.startsWith("bot_ctrl:")) await client.join(channelName)
+      if (!channelName.startsWith("bot_ctrl:")) {
+        // Auto-align: ask the browser what canvas it's on and follow it.
+        // "Current canvas" = what the user sees, not what the CLI remembers.
+        const ctrlCh = `bot_ctrl:${userId}`
+        await client.join(ctrlCh)
+        const queryAction: BotAction = {
+          actionId: crypto.randomUUID(),
+          sessionId: session.sessionId,
+          timestamp: new Date().toISOString(),
+          type: "get_current_canvas",
+        }
+        try {
+          const resp = await sendAndWait(client, ctrlCh, queryAction, QUICK_PING_MS)
+          const browserConvId = (resp as any).data?.convId
+          if (browserConvId) {
+            if (browserConvId !== channelName.replace("bot:", "")) {
+              // Browser is on a different canvas — follow it
+              channelName = `bot:${browserConvId}`
+              session.activeConvId = browserConvId
+              saveSession(session)
+            }
+          } else {
+            // Browser is not on a canvas page — throw clear error
+            throw new BrowserConnectionError(
+              "No canvas is open in the browser. Please navigate to a canvas, then re-run.",
+              "NO_CANVAS",
+            )
+          }
+        } catch (e) {
+          if (e instanceof BrowserConnectionError) throw e
+          // Query failed — proceed with original target
+        }
+        await client.join(channelName)
+      }
       return await sendAndWait(client, channelName, action, timeout)
     } catch (e: any) {
       lastError = e
@@ -999,7 +1122,7 @@ async function uploadToWorker(
   const ext = extname(absPath).slice(1).toLowerCase()
   if (!IMAGE_EXTS.has(ext))
     throw new Error(
-      `Not an image file: ${filePath} (supported: ${[...IMAGE_EXTS].join(", ")})`,
+      `Not an image file: ${filePath} (supported: ${Array.from(IMAGE_EXTS).join(", ")})`,
     )
 
   const fileData = readFileSync(absPath)
@@ -1096,18 +1219,57 @@ async function main() {
 
   // ---- open ----
   if (cmd === "open") {
-    const base = await getFlowithUrl()
     const existing = loadSession()
     const convId = args[1] || existing?.activeConvId
+
+    // If we have a session and a convId, try same-tab navigation via broadcast first
+    if (existing && convId) {
+      const uid = getJwtUserId(existing.accessToken)
+      if (uid) {
+        const client = new RealtimeLite(
+          existing.supabaseUrl,
+          existing.supabaseKey,
+          existing.accessToken,
+        )
+        try {
+          await client.connect()
+          const ch = `bot_ctrl:${uid}`
+          await client.join(ch)
+          if (await quickPing(client, ch, existing)) {
+            // Browser is alive — navigate in same tab
+            assertUUID(convId, "convId")
+            const action: BotAction = {
+              actionId: crypto.randomUUID(),
+              sessionId: existing.sessionId,
+              timestamp: new Date().toISOString(),
+              type: "switch_canvas",
+              convId,
+            }
+            await sendAndWait(client, ch, action, ACTION_TIMEOUT_MS)
+            if (args[1]) existing.activeConvId = args[1]
+            saveSession(existing)
+            console.error(`Navigated to canvas ${convId} (same tab)`)
+            return
+          }
+        } catch (e: any) {
+          // Any failure (WS connect, ping, switch) — fall through to openInBrowser
+          if (e?.message) console.error(`Same-tab navigation failed: ${e.message}`)
+        } finally {
+          client.close()
+        }
+      }
+    }
+
+    // Fallback: open new browser tab (no browser connected or no session)
+    const base = await getFlowithUrl()
     const target = convId ? `${base}/conv/${convId}` : base
     await openInBrowser(target)
-    // Record browser open so ensureBrowserConnected() cooldown prevents duplicate tabs
     if (existing) {
       existing.lastBrowserOpenAt = new Date().toISOString()
       if (args[1]) existing.activeConvId = args[1]
       saveSession(existing)
     }
-    console.error(`Opened ${target}`)
+    console.error(`Opened ${target} (new tab)`)
     return
   }
 
@@ -1172,6 +1334,27 @@ async function main() {
   if (!userId) {
     console.error("Error: Invalid token.")
     process.exit(1)
+  }
+
+  // ---- current: ask browser what canvas user is viewing ----
+  if (cmd === "current") {
+    const action: BotAction = {
+      actionId: crypto.randomUUID(),
+      sessionId: session.sessionId,
+      timestamp: new Date().toISOString(),
+      type: "get_current_canvas",
+      includeTitle: true,
+    }
+    const result = await connectAndExecute(
+      session,
+      userId,
+      `bot_ctrl:${userId}`,
+      action,
+      QUICK_PING_MS,
+      botClient,
+    )
+    console.log(JSON.stringify(result, null, 2))
+    return
   }
 
   // ---- list ----
@@ -1296,16 +1479,23 @@ async function main() {
 
   // ---- read-db (via browser) ----
   if (cmd === "read-db") {
-    if (!session.activeConvId) {
+    // --conv <id> allows reading any canvas without switching away from the current one
+    const { values: convValues, rest: readDbRest } = extractFlag(
+      args.slice(1),
+      "--conv",
+    )
+    const explicitConvId = convValues[0]
+    if (explicitConvId) assertUUID(explicitConvId, "convId")
+    const convId = explicitConvId || session.activeConvId
+    if (!convId) {
       console.error(
         "Error: No active canvas. Run: create-canvas or list → switch <id>",
       )
       process.exit(1)
     }
-    const convId = session.activeConvId
-    assertUUID(convId, "activeConvId")
-    const flags = new Set(args.slice(1).filter(a => a.startsWith("--")))
-    const positional = args.slice(1).find(a => !a.startsWith("--"))
+    assertUUID(convId, "convId")
+    const flags = new Set(readDbRest.filter(a => a.startsWith("--")))
+    const positional = readDbRest.find(a => !a.startsWith("--"))
     if (positional) assertUUID(positional, "nodeId")
     const action: BotAction = {
       actionId: crypto.randomUUID(),
@@ -1359,18 +1549,20 @@ async function main() {
 
   // ---- submit-batch: fire N submits over one connection ----
   if (cmd === "submit-batch") {
-    const prompts = args.slice(1).filter(a => !a.startsWith("--"))
+    const { values: followFlag, rest: batchRest } = extractFlag(args.slice(1), "--follow")
+    const follow = followFlag[0]
+    if (follow) assertUUID(follow, "follow nodeId")
+    const prompts = batchRest.filter(a => !a.startsWith("--"))
     if (!prompts.length) {
       console.error(
-        'Error: submit-batch requires at least one prompt.\nUsage: submit-batch "prompt1" "prompt2" ...',
+        'Error: submit-batch requires at least one prompt.\nUsage: submit-batch [--follow <nodeId>] "prompt1" "prompt2" ...',
       )
       process.exit(1)
     }
     if (!session.activeConvId) {
-      console.error("Error: No active canvas.")
-      process.exit(1)
+      session.activeConvId = "00000000-0000-0000-0000-000000000000"
     }
-    assertUUID(session.activeConvId, "activeConvId")
+    assertUUID(session.activeConvId!, "activeConvId")
     const ch = `bot:${session.activeConvId}`
 
     const client = new RealtimeLite(
@@ -1398,16 +1590,11 @@ async function main() {
         }) as BotAction
 
       for (let i = 0; i < prompts.length; i++) {
-        // Deselect to create independent branches
-        await sendAndWait(
-          client,
-          ch,
-          makeAction({ type: "deselect" }),
-          ACTION_TIMEOUT_MS,
-        )
-
-        // Submit without waiting for generation
-        const submitAction = makeAction({ type: "submit", value: prompts[i] })
+        const submitAction = makeAction({
+          type: "submit",
+          value: prompts[i],
+          ...(follow ? { follow } : {}),
+        })
         const resp = await sendAndWait(
           client,
           ch,
@@ -1457,11 +1644,12 @@ async function main() {
   let timeout = ACTION_TIMEOUT_MS
 
   const requireCanvas = () => {
+    // activeConvId may be null if session was created while browser was on homepage.
+    // The auto-align in connectAndExecute will detect the browser's actual canvas
+    // via get_current_canvas — so we only need a placeholder here.
+    // Use a dummy UUID that connectAndExecute will override.
     if (!session.activeConvId) {
-      console.error(
-        "Error: No active canvas. Run: create-canvas or list → switch <id>",
-      )
-      process.exit(1)
+      session.activeConvId = "00000000-0000-0000-0000-000000000000"
     }
     assertUUID(session.activeConvId!, "activeConvId")
   }
@@ -1508,7 +1696,7 @@ async function main() {
       }
       if (!VALID_MODES.has(args[1])) {
         console.error(
-          `Error: invalid mode "${args[1]}". Valid modes: ${[...VALID_MODES].join(", ")}`,
+          `Error: invalid mode "${args[1]}". Valid modes: ${Array.from(VALID_MODES).join(", ")}`,
         )
         process.exit(1)
       }
@@ -1524,22 +1712,6 @@ async function main() {
       }
       requireCanvas()
       action = { ...base, type: "set_model", model: args[1] }
-      channelName = canvasCh()
-      break
-    }
-    case "select": {
-      if (!args[1]) {
-        console.error("Error: select requires nodeId.")
-        process.exit(1)
-      }
-      requireCanvas()
-      action = { ...base, type: "select_node", nodeId: args[1] }
-      channelName = canvasCh()
-      break
-    }
-    case "deselect": {
-      requireCanvas()
-      action = { ...base, type: "deselect" }
       channelName = canvasCh()
       break
     }
@@ -1566,6 +1738,24 @@ async function main() {
       }
       requireCanvas()
       const { values: imagePaths } = extractFlag(args.slice(2), "--image")
+      const { values: modeFlag } = extractFlag(args.slice(2), "--mode")
+      const { values: followFlag } = extractFlag(args.slice(2), "--follow")
+      // --mode: set mode inline before submitting
+      if (modeFlag.length > 0) {
+        const m = modeFlag[0] === "neo" ? "agent" : modeFlag[0]
+        if (!VALID_MODES.has(modeFlag[0])) {
+          console.error(
+            `Error: invalid mode "${modeFlag[0]}". Valid: ${Array.from(VALID_MODES).join(", ")}`,
+          )
+          process.exit(1)
+        }
+        const modeAction: BotAction = { ...base, actionId: crypto.randomUUID(), type: "set_mode", mode: m }
+        const modeResult = await connectAndExecute(session, userId, canvasCh(), modeAction, ACTION_TIMEOUT_MS, botClient)
+        console.log(JSON.stringify(modeResult, null, 2))
+      }
+      // --follow: specify parent node for follow-up
+      const follow = followFlag[0]
+      if (follow) assertUUID(follow, "follow nodeId")
       const files =
         imagePaths.length > 0
           ? await resolveImages(imagePaths, session)
@@ -1575,6 +1765,7 @@ async function main() {
         type: "submit",
         value: args[1],
         ...(files ? { files } : {}),
+        ...(follow ? { follow } : {}),
       }
       channelName = canvasCh()
       timeout = ORACLE_TIMEOUT_MS
@@ -1820,8 +2011,6 @@ Commands:
 
   set-mode <mode>                 Set generation mode (text|image|video|agent|neo)
   set-model <model-id>            Set model
-  select <nodeId>                 Select node as follow-up target
-  deselect                        Clear follow-up target (next submit starts a new branch)
   submit "text" [--image <path-or-url>]... [--wait]
                                     Submit text with optional image(s)
                                     --image: local file (auto-uploaded) or URL
@@ -1840,10 +2029,12 @@ Commands:
                                     Empty query with --conv lists all entries on that canvas
   recall-node <convId> <nodeId>   Get bookshelf metadata for a specific node
 
-  read-db [nodeId] [--failed] [--full]  Read nodes from database (default: summary)
+  read-db [nodeId] [--failed] [--full] [--conv <convId>]
+                                         Read nodes from database (default: summary)
                                          nodeId: drill into one node (full content)
                                          --full: all nodes with full content
                                          --failed: only failed nodes
+                                         --conv: read from a different canvas (no switch)
   clean-failed                    Find & delete all failed nodes from database
 
   dream-init "theme" [--mode m]   Initialize creative journal (default: image)

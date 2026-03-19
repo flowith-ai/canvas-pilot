@@ -30,9 +30,9 @@ Valid: `claude-code` | `codex` | `openclaw` | `cursor` | `opencode` | `flowithos
 
 The tree structure is not a log — it IS the thinking. Where you place a node is a creative decision.
 
-- **Chain** (A→B→C): Each step builds on the last. Use `select` + `submit`.
-- **Branch** (A→B1, A→B2): Exploring alternatives. Use `deselect` + `submit`.
-- **Rewind** (branch from B, not C): Going back to where things were still good.
+- **Chain** (A→B→C): Each step builds on the last. Use `submit --follow <nodeId>`.
+- **Branch** (A→B1, A→B2): Exploring alternatives. Use `submit` (no `--follow`).
+- **Rewind** (branch from B, not C): `submit --follow <B's nodeId>` to go back.
 
 One submit = one node = one idea. Never cram multiple ideas into one prompt.
 
@@ -41,7 +41,7 @@ One submit = one node = one idea. Never cram multiple ideas into one prompt.
 **Start everything, then look.** When you have multiple independent things to make — 5 dogs, 3 poems, a mix of images and text — fire them all at once. Don't wait for one to finish before starting the next.
 
 - Same mode, all independent → `submit-batch "p1" "p2" "p3"`
-- Mixed modes or need `deselect` between → individual `submit` commands, no `--wait`
+- Mixed modes → individual `submit` commands, no `--wait`
 - Then `read-db --full` to collect all results
 
 **Slow down only when the previous result changes what you do next.** If prompt B depends on seeing what prompt A produced, use `--wait` on A. If they're independent, don't wait.
@@ -56,6 +56,8 @@ Use judgment, not ceremony.
 - **Does the request echo past work?** If so, `recall` to find it. If it's clearly fresh ("draw 5 cats"), just start.
 - **Choose mode by intent**: `text` for answers. `image` for visuals. `video` for clips. `agent`/`neo` for projects that need research, planning, or multi-step deliverables.
 - **Failure is signal**: `clean-failed`, switch model or simplify, then retry.
+- **Stay in place.** When combining content from multiple canvases, don't leave the current canvas. Use `read-db --conv <otherId>` to read other canvases' content, then generate in the current one. Never create a new canvas just to merge — work where you are.
+- **Navigate, don't open.** To move between canvases, use `switch`. `open` is only for bringing the browser to the foreground or launching it the first time. `open` will try same-tab SPA navigation automatically if the browser is already connected.
 
 ## Working with the Canvas
 
@@ -75,8 +77,8 @@ bun $S --bot claude-code read-db --full    # collect results
 
 # --- Chain: iterative refinement ---
 bun $S --bot claude-code submit "husky in snow" --wait
-bun $S --bot claude-code select <nodeId>
-bun $S --bot claude-code submit "same dog, but running" --wait
+# → get the response nodeId from the result
+bun $S --bot claude-code submit "same dog, but running" --follow <nodeId> --wait
 
 # --- Mixed modes without waiting ---
 bun $S --bot claude-code set-mode image && bun $S --bot claude-code submit "a loyal dog waiting at the door"
@@ -91,6 +93,10 @@ bun $S --bot claude-code submit "gentle camera zoom" --image https://example.com
 # --- Agent Neo ---
 bun $S --bot claude-code set-mode neo
 bun $S --bot claude-code submit "Research the top 5 AI startups and create a comparison deck" --wait=600
+
+# --- Cross-canvas: read from another canvas without leaving ---
+bun $S --bot claude-code read-db --conv <otherConvId> --full   # read, don't switch
+# → Combine content here in the current canvas via submit
 
 # --- Recall past work ---
 bun $S recall "cyberpunk logo" --type image
@@ -130,7 +136,7 @@ bun $S --bot claude-code dream-init "ukiyo-e x cyberpunk"
 | `list` | List 20 most recent canvases |
 | `search "query"` | Search canvases by title |
 | `list-models [mode]` | List available models |
-| `open [convId]` | Open canvas in browser |
+| `open [convId]` | Open canvas in browser (same-tab if connected, new tab otherwise) |
 | `status` | Check session/activeConvId |
 
 ### Canvas Operations (require canvas page open)
@@ -139,9 +145,7 @@ bun $S --bot claude-code dream-init "ukiyo-e x cyberpunk"
 |---------|-------------|
 | `set-mode <mode>` | Switch mode (text/image/video/agent/neo) |
 | `set-model <model-id>` | Select model (text/image/video only) |
-| `select <nodeId>` | Follow up on a node (ancestor chain becomes context) |
-| `deselect` | Clear follow-up target |
-| `submit "text" [--image ...] [--wait[=sec]]` | Submit a generation |
+| `submit "text" [--follow id] [--mode m] [--image ...] [--wait[=sec]]` | Submit a generation |
 | `submit-batch "p1" "p2" ...` | N independent same-mode submits |
 | `read [nodeId \| --all]` | Read node content (browser memory) |
 | `comment <nodeId> "text"` | Move cursor to node + show comment label (30s fade) |
@@ -152,10 +156,11 @@ bun $S --bot claude-code dream-init "ukiyo-e x cyberpunk"
 
 | Command | What it does |
 |---------|-------------|
-| `read-db` | Scan all nodes — summary |
+| `read-db [--conv <convId>]` | Scan all nodes — summary (default: active canvas) |
 | `read-db <nodeId>` | Full content of one node |
 | `read-db --full` | All nodes with full content |
 | `read-db --failed` | Failed nodes only |
+| `read-db --conv <id> --full` | Read another canvas without switching away |
 | `clean-failed` | Delete failed nodes + orphaned parents |
 
 ### Memory
