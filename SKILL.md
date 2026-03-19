@@ -41,10 +41,12 @@ One submit = one node = one idea. Never cram multiple ideas into one prompt.
 
 **NEVER submit independent prompts one by one.** This is the single most common mistake. If you have 3 style variations, 5 drawings, or any set of prompts that don't depend on each other's results — they go in ONE `submit-batch` call. No exceptions.
 
-- Same mode, all independent → `submit-batch "p1" "p2" "p3"`
-- Variations from one parent → `submit-batch --follow <parentId> "variation1" "variation2" "variation3"`
-- Mixed modes → individual `submit` commands, no `--wait`
+- Fresh topics, no parent → `submit-batch "p1" "p2" "p3"`
+- Variations from one parent → `submit-batch --follow <parentId> "var1" "var2" "var3"`
+- Mixed modes → individual `submit` commands (with `--follow` if derived), no `--wait`
 - Then `read-db --full` to collect all results
+
+Ask yourself: "Are these derived from something on the canvas?" If yes → `--follow`. If no → omit.
 
 **Slow down only when the previous result changes what you do next.** If prompt B depends on seeing what prompt A produced, use `--wait` on A. If they're independent, don't wait. That's the only rule.
 
@@ -58,8 +60,7 @@ Use judgment, not ceremony.
 - **Default models**: Prefer `seedream-v4.5` for image, `gpt-4.1` for text. Always verify with `list-models <mode>` if unsure what's available — don't guess model names.
 - **Failure is signal**: `clean-failed`, switch model or simplify, then retry.
 - **Stay in place.** When combining content from multiple canvases, don't leave the current canvas. Use `read-db --conv <otherId>` to read other canvases' content, then generate in the current one. Never create a new canvas just to merge — work where you are.
-- **Navigate, don't open.** To move between canvases, use `switch`. `open` is only for bringing the browser to the foreground or launching it the first time. `open` will try same-tab SPA navigation automatically if the browser is already connected.
-- **Invitation links**: When the user sends a URL with `?` parameters (shared canvas link), use `open "<full-url>"` — do NOT extract the conv_id for `switch`. The query parameters contain the auth token required for access.
+- **Navigate, don't open.** To move between your own canvases, use `switch`. `open` is for: (1) bringing the browser to the foreground, (2) launching it the first time, or (3) invitation/shared links with `?` parameters — use `open "<full-url>"` to preserve the auth token. Never extract a conv_id from a shared URL and `switch` to it.
 
 ## Working with the Canvas
 
@@ -73,11 +74,14 @@ bun $S --bot claude-code create-canvas "Dog Artwork"
 bun $S --bot claude-code set-mode image
 bun $S --bot claude-code submit "a golden retriever in a wheat field" --wait
 
-# --- Burst: many independent items ---
+# --- Burst: many independent items (fresh, no parent) ---
 bun $S --bot claude-code submit-batch "golden retriever" "husky" "corgi" "poodle" "shiba inu"
 bun $S --bot claude-code read-db --full    # collect results
 
-# --- Chain: iterative refinement ---
+# --- Burst: variations from one parent (all branch from same node) ---
+bun $S --bot claude-code submit-batch --follow <nodeId> "watercolor style" "cyberpunk style" "ukiyo-e style"
+
+# --- Chain: iterative refinement (A→B→C) ---
 bun $S --bot claude-code submit "husky in snow" --wait
 # → get the response nodeId from the result
 bun $S --bot claude-code submit "same dog, but running" --follow <nodeId> --wait
@@ -148,7 +152,7 @@ bun $S --bot claude-code dream-init "ukiyo-e x cyberpunk"
 | `set-mode <mode>` | Switch mode (text/image/video/agent/neo) |
 | `set-model <model-id>` | Select model (text/image/video only) |
 | `submit "text" [--follow id] [--mode m] [--image ...] [--wait[=sec]]` | Submit a generation |
-| `submit-batch "p1" "p2" ...` | N independent same-mode submits |
+| `submit-batch [--follow id] "p1" "p2" ...` | N same-mode submits (use --follow for variations) |
 | `read [nodeId \| --all]` | Read node content (browser memory) |
 | `comment <nodeId> "text"` | Move cursor to node + show comment label (30s fade) |
 | `delete <nodeId>` | Delete a node |
