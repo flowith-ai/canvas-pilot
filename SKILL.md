@@ -105,7 +105,7 @@ bun $S --bot claude-code read-db --conv <otherConvId> --full   # read, don't swi
 # → Combine content here in the current canvas via submit
 
 # --- Recall past work ---
-bun $S recall "cyberpunk logo" --type image
+bun $S --bot claude-code recall "cyberpunk logo" --type image
 # → Found: address.conv_id + metadata.imageURL → show or switch to it
 ```
 
@@ -142,7 +142,7 @@ bun $S --bot claude-code dream-init "ukiyo-e x cyberpunk"
 | `list` | List 20 most recent canvases |
 | `search "query"` | Search canvases by title |
 | `list-models [mode]` | List available models |
-| `open [convId]` | Open canvas in browser (same-tab if connected, new tab otherwise) |
+| `open [convId \| url]` | Open canvas in browser; accepts full URLs for shared/invitation links |
 | `status` | Check session/activeConvId |
 
 ### Canvas Operations (require canvas page open)
