@@ -91,10 +91,19 @@ bun $S --bot claude-code set-mode image && bun $S --bot claude-code submit "a lo
 bun $S --bot claude-code set-mode text && bun $S --bot claude-code submit "write a poem about a loyal dog"
 bun $S --bot claude-code read-db --full
 
+# --- Aspect ratio & resolution ---
+bun $S --bot claude-code submit "a golden retriever" --ratio 16:9 --wait
+bun $S --bot claude-code submit "a golden retriever" --size 1536x1024 --wait
+
 # --- Image-to-image / Image-to-video ---
 bun $S --bot claude-code submit "cyberpunk version" --image ./photo.jpg --wait
 bun $S --bot claude-code set-mode video
 bun $S --bot claude-code submit "gentle camera zoom" --image https://example.com/scene.png --wait=600
+
+# --- Video with duration, loop, and audio control ---
+bun $S --bot claude-code submit "a dog running" --mode video --duration 10 --ratio 16:9 --wait=600
+bun $S --bot claude-code submit "seamless loop" --mode video --image ./scene.png --loop --wait=600
+bun $S --bot claude-code submit "silent timelapse" --mode video --no-audio --wait=600
 
 # --- Agent Neo ---
 bun $S --bot claude-code set-mode neo
@@ -114,6 +123,17 @@ bun $S --bot claude-code recall "cyberpunk logo" --type image
 - **Image**: ALWAYS use `![description](url)` — never paste a raw URL. Describe what you actually see, not what the prompt asked for.
 - **Text/Agent**: print the content directly.
 - **Video**: `[Watch video](url)`.
+
+### Image & Video Generation Flags
+
+Run `list-models image` or `list-models video` first. Pass values exactly as they appear in the model's arrays — formats vary across models.
+
+- `--ratio <value>` → from `supportedAspectRatios`
+- `--size <value>` → from `supportedImageSizes`
+- `--duration <sec>` → from `supportedDurations`
+- `--no-audio` → opt out when `supportsAudio: true` (audio is ON by default)
+- `--image` × 2 → start/end keyframes when `supportedKeyframe: true`
+- `--loop` → loop video (start frame = end frame, requires `--image`)
 
 ### `--wait` Mechanics
 
@@ -151,7 +171,7 @@ bun $S --bot claude-code dream-init "ukiyo-e x cyberpunk"
 |---------|-------------|
 | `set-mode <mode>` | Switch mode (text/image/video/agent/neo) |
 | `set-model <model-id>` | Select model (text/image/video only) |
-| `submit "text" [--follow id] [--mode m] [--image ...] [--wait[=sec]]` | Submit a generation |
+| `submit "text" [--follow id] [--mode m] [--image ...] [--ratio r] [--size s] [--duration d] [--loop] [--no-audio] [--wait[=sec]]` | Submit a generation |
 | `submit-batch [--follow id] "p1" "p2" ...` | N same-mode submits (use --follow for variations) |
 | `read [nodeId \| --all]` | Read node content (browser memory) |
 | `comment <nodeId> "text"` | Move cursor to node + show comment label (30s fade) |

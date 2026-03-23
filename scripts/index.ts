@@ -93,6 +93,11 @@ type BotAction = BotActionBase &
         value: string
         files?: Array<{ url: string; name: string; type?: string }>
         follow?: string
+        aspectRatio?: string
+        imageSize?: string
+        videoDuration?: string
+        videoLoop?: boolean
+        videoAudio?: boolean
       }
     | { type: "comment"; nodeId: string; text: string }
     | { type: "delete_node"; nodeId: string }
@@ -1760,6 +1765,11 @@ async function main() {
       const { values: imagePaths } = extractFlag(args.slice(2), "--image")
       const { values: modeFlag } = extractFlag(args.slice(2), "--mode")
       const { values: followFlag } = extractFlag(args.slice(2), "--follow")
+      const { values: ratioFlag } = extractFlag(args.slice(2), "--ratio")
+      const { values: sizeFlag } = extractFlag(args.slice(2), "--size")
+      const { values: durationFlag } = extractFlag(args.slice(2), "--duration")
+      const hasLoop = args.slice(2).includes("--loop")
+      const hasNoAudio = args.slice(2).includes("--no-audio")
       // --mode: set mode inline before submitting
       if (modeFlag.length > 0) {
         const m = modeFlag[0] === "neo" ? "agent" : modeFlag[0]
@@ -1780,12 +1790,20 @@ async function main() {
         imagePaths.length > 0
           ? await resolveImages(imagePaths, session)
           : undefined
+      const aspectRatio = ratioFlag[0]
+      const imageSize = sizeFlag[0]
+      const videoDuration = durationFlag[0]
       action = {
         ...base,
         type: "submit",
         value: args[1],
         ...(files ? { files } : {}),
         ...(follow ? { follow } : {}),
+        ...(aspectRatio ? { aspectRatio } : {}),
+        ...(imageSize ? { imageSize } : {}),
+        ...(videoDuration ? { videoDuration } : {}),
+        ...(hasLoop ? { videoLoop: true } : {}),
+        ...(hasNoAudio ? { videoAudio: false } : {}),
       }
       channelName = canvasCh()
       timeout = ORACLE_TIMEOUT_MS
@@ -2031,12 +2049,17 @@ Commands:
 
   set-mode <mode>                 Set generation mode (text|image|video|agent|neo)
   set-model <model-id>            Set model
-  submit "text" [--image <path-or-url>]... [--wait]
+  submit "text" [--image <path-or-url>]... [--ratio <r>] [--size <s>] [--wait]
                                     Submit text with optional image(s)
                                     --image: local file (auto-uploaded) or URL
                                     In image mode: used as style reference
                                     In video mode: used as start/end frame
                                     In text mode: multimodal attachment
+                                    --ratio: aspect ratio (e.g. 1:1, 16:9, 9:16, 4:3, 3:4)
+                                    --size: image resolution (e.g. 1024x1024, 1536x1024)
+                                    --duration: video duration in seconds (e.g. 5, 10)
+                                    --loop: loop video (start frame = end frame)
+                                    --no-audio: disable audio generation
 
   read [nodeId | --all]           Read node(s) from browser memory
   delete <nodeId>                 Delete node (via browser)
