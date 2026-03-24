@@ -49,6 +49,7 @@ interface BotActionBase {
   actionId: string
   sessionId: string
   timestamp: string
+  agentId?: string
 }
 type BotAction = BotActionBase &
   (
@@ -292,6 +293,41 @@ function parseBotClient(rawArgs: string[]): {
     }
   }
   return { botClient: process.env.BOT_CLIENT || "other", args: rawArgs }
+}
+
+// ============ Canvas & parallel flags ============
+
+function parseCanvasFlag(rawArgs: string[]): { args: string[]; canvasId?: string } {
+  const idx = rawArgs.indexOf("--canvas")
+  if (idx !== -1 && rawArgs[idx + 1]) {
+    return {
+      canvasId: rawArgs[idx + 1],
+      args: [...rawArgs.slice(0, idx), ...rawArgs.slice(idx + 2)],
+    }
+  }
+  return { args: rawArgs }
+}
+
+function parseParallelFlag(rawArgs: string[]): { args: string[]; parallel: boolean } {
+  const idx = rawArgs.indexOf("--parallel")
+  if (idx !== -1) {
+    return {
+      parallel: true,
+      args: [...rawArgs.slice(0, idx), ...rawArgs.slice(idx + 1)],
+    }
+  }
+  return { parallel: false, args: rawArgs }
+}
+
+function parseAgentIdFlag(rawArgs: string[]): { args: string[]; agentId?: string } {
+  const idx = rawArgs.indexOf("--agent-id")
+  if (idx !== -1 && rawArgs[idx + 1]) {
+    return {
+      agentId: rawArgs[idx + 1],
+      args: [...rawArgs.slice(0, idx), ...rawArgs.slice(idx + 2)],
+    }
+  }
+  return { args: rawArgs }
 }
 
 // ============ Browser open helper ============
@@ -1018,8 +1054,10 @@ async function connectAndExecute(
   action: BotAction,
   timeout: number,
   botClient: string,
+  options?: { parallel?: boolean },
 ): Promise<BotResponse> {
   let lastError: Error | null = null
+  const isParallel = options?.parallel ?? false
 
   for (let attempt = 0; attempt <= MAX_RETRIES; attempt++) {
     const client = new RealtimeLite(
@@ -1030,10 +1068,12 @@ async function connectAndExecute(
     try {
       await client.connect()
       await registerWithFrontend(client, session, userId, botClient)
-      await ensureBrowserConnected(client, session, userId, botClient)
-      if (!channelName.startsWith("bot_ctrl:")) {
+      if (!isParallel) {
+        await ensureBrowserConnected(client, session, userId, botClient)
+      }
+      if (!channelName.startsWith("bot_ctrl:") && !isParallel) {
         // Auto-align: ask the browser what canvas it's on and follow it.
-        // "Current canvas" = what the user sees, not what the CLI remembers.
+        // Skipped in parallel mode — canvas is explicit via --canvas flag.
         const ctrlCh = `bot_ctrl:${userId}`
         await client.join(ctrlCh)
         const queryAction: BotAction = {
@@ -1063,6 +1103,8 @@ async function connectAndExecute(
           if (e instanceof BrowserConnectionError) throw e
           // Query failed — proceed with original target
         }
+      }
+      if (!channelName.startsWith("bot_ctrl:")) {
         await client.join(channelName)
       }
       return await sendAndWait(client, channelName, action, timeout)
@@ -1203,7 +1245,16 @@ function extractFlag(
 // ============ Main ============
 
 async function main() {
-  const { args, botClient } = parseBotClient(process.argv.slice(2))
+  const { args: args0, botClient } = parseBotClient(process.argv.slice(2))
+  const { args: args1, canvasId: explicitCanvasId } = parseCanvasFlag(args0)
+  const { args: args2, parallel: parallelMode } = parseParallelFlag(args1)
+  const { args, agentId } = parseAgentIdFlag(args2)
+
+  if (parallelMode && !explicitCanvasId) {
+    console.error("Error: --parallel requires --canvas <convId>.")
+    process.exit(1)
+  }
+
   if (!args.length || args[0] === "-h" || args[0] === "--help") {
     printUsage()
     process.exit(args.length ? 0 : 1)
@@ -1359,6 +1410,11 @@ async function main() {
   if (!userId) {
     console.error("Error: Invalid token.")
     process.exit(1)
+  }
+
+  // --canvas: explicitly target a canvas (skip auto-alignment)
+  if (explicitCanvasId) {
+    session.activeConvId = explicitCanvasId
   }
 
   // ---- current: ask browser what canvas user is viewing ----
@@ -1663,6 +1719,7 @@ async function main() {
     actionId,
     sessionId: session.sessionId,
     timestamp: new Date().toISOString(),
+    ...(agentId ? { agentId } : {}),
   }
   let action: BotAction
   let channelName: string
@@ -1764,25 +1821,38 @@ async function main() {
       requireCanvas()
       const { values: imagePaths } = extractFlag(args.slice(2), "--image")
       const { values: modeFlag } = extractFlag(args.slice(2), "--mode")
+      const { values: modelFlag } = extractFlag(args.slice(2), "--model")
       const { values: followFlag } = extractFlag(args.slice(2), "--follow")
       const { values: ratioFlag } = extractFlag(args.slice(2), "--ratio")
       const { values: sizeFlag } = extractFlag(args.slice(2), "--size")
       const { values: durationFlag } = extractFlag(args.slice(2), "--duration")
       const hasLoop = args.slice(2).includes("--loop")
       const hasNoAudio = args.slice(2).includes("--no-audio")
-      // --mode: set mode inline before submitting
+
+      // Validate mode if provided
+      let inlineMode: string | undefined
       if (modeFlag.length > 0) {
-        const m = modeFlag[0] === "neo" ? "agent" : modeFlag[0]
         if (!VALID_MODES.has(modeFlag[0])) {
           console.error(
             `Error: invalid mode "${modeFlag[0]}". Valid: ${Array.from(VALID_MODES).join(", ")}`,
           )
           process.exit(1)
         }
-        const modeAction: BotAction = { ...base, actionId: crypto.randomUUID(), type: "set_mode", mode: m }
+        inlineMode = modeFlag[0] === "neo" ? "agent" : modeFlag[0]
+      }
+      const inlineModel = modelFlag[0]
+
+      // In parallel mode or when --model is provided, bundle mode+model into
+      // the submit action for atomic execution (no separate set_mode call).
+      // In non-parallel mode without --model, fall back to separate set_mode
+      // for backward compatibility with frontends that don't support inline mode.
+      if (!parallelMode && inlineMode && !inlineModel) {
+        const modeAction: BotAction = { ...base, actionId: crypto.randomUUID(), type: "set_mode", mode: inlineMode }
         const modeResult = await connectAndExecute(session, userId, canvasCh(), modeAction, ACTION_TIMEOUT_MS, botClient)
         console.log(JSON.stringify(modeResult, null, 2))
+        inlineMode = undefined // Already applied, don't send again
       }
+
       // --follow: specify parent node for follow-up
       const follow = followFlag[0]
       if (follow) assertUUID(follow, "follow nodeId")
@@ -1804,6 +1874,8 @@ async function main() {
         ...(videoDuration ? { videoDuration } : {}),
         ...(hasLoop ? { videoLoop: true } : {}),
         ...(hasNoAudio ? { videoAudio: false } : {}),
+        ...(inlineMode ? { mode: inlineMode } : {}),
+        ...(inlineModel ? { model: inlineModel } : {}),
       }
       channelName = canvasCh()
       timeout = ORACLE_TIMEOUT_MS
@@ -1858,10 +1930,11 @@ async function main() {
     action,
     timeout,
     botClient,
+    parallelMode ? { parallel: true } : undefined,
   )
 
-  // Auto-set activeConvId after successful create_canvas
-  if (
+  // Auto-set activeConvId after successful create_canvas (skip in parallel mode)
+  if (!parallelMode &&
     action.type === "create_canvas" &&
     result.type === "result" &&
     (result.data as any)?.convId

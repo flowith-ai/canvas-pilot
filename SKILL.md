@@ -50,6 +50,28 @@ Ask yourself: "Are these derived from something on the canvas?" If yes → `--fo
 
 **Slow down only when the previous result changes what you do next.** If prompt B depends on seeing what prompt A produced, use `--wait` on A. If they're independent, don't wait. That's the only rule.
 
+### Parallel Generation
+
+For batch processing (e.g., applying a skill to many images), spawn N subagents that each run independently:
+
+```bash
+# Each subagent runs with --parallel and --canvas (atomic mode+model, no race conditions)
+bun $S --bot claude-code submit "cyberpunk version" \
+  --mode image --model seedream-v4.5 \
+  --image ./photo1.jpg \
+  --canvas <convId> --parallel --agent-id agent-1 --wait
+```
+
+Key flags:
+- `--parallel`: Read-only session, skip auto-alignment, no browser open attempt
+- `--canvas <convId>`: Explicit canvas targeting (required with `--parallel`)
+- `--mode` and `--model` on submit: Bundled atomically into the submit action (no separate set-mode call)
+
+The orchestrator should:
+1. Create/switch canvas and set up session BEFORE spawning subagents
+2. Each subagent uses `--parallel --canvas <convId>`
+3. Mode/model are set inline per submit (no state conflicts between agents)
+
 ### Before You Start
 
 Use judgment, not ceremony.
@@ -171,12 +193,21 @@ bun $S --bot claude-code dream-init "ukiyo-e x cyberpunk"
 |---------|-------------|
 | `set-mode <mode>` | Switch mode (text/image/video/agent/neo) |
 | `set-model <model-id>` | Select model (text/image/video only) |
-| `submit "text" [--follow id] [--mode m] [--image ...] [--ratio r] [--size s] [--duration d] [--loop] [--no-audio] [--wait[=sec]]` | Submit a generation |
+| `submit "text" [--follow id] [--mode m] [--model id] [--image ...] [--ratio r] [--size s] [--duration d] [--loop] [--no-audio] [--wait[=sec]]` | Submit a generation |
 | `submit-batch [--follow id] "p1" "p2" ...` | N same-mode submits (use --follow for variations) |
 | `read [nodeId \| --all]` | Read node content (browser memory) |
 | `comment <nodeId> "text"` | Move cursor to node + show comment label (30s fade) |
 | `delete <nodeId>` | Delete a node |
 | `delete-many <id1> <id2> ...` | Delete multiple nodes |
+
+### Global Flags
+
+| Flag | What it does |
+|------|-------------|
+| `--bot <identity>` | Bot identity (claude-code/codex/openclaw/cursor/opencode/flowithos) |
+| `--canvas <convId>` | Explicit canvas targeting (skip auto-alignment) |
+| `--parallel` | Multi-agent mode: read-only session, no browser open, requires --canvas |
+| `--agent-id <id>` | Unique agent ID for multi-cursor support (each agent gets its own cursor) |
 
 ### Database Operations (via browser)
 
