@@ -1,6 +1,6 @@
 # Canvas Pilot
 
-Pilot a spatial canvas from the CLI — create canvases, generate images/text/video/agent responses, read results, recall past work, and manage nodes on [Flowith](https://flowith.net)'s shared canvas.
+Pilot a spatial canvas from the CLI — create canvases, generate images/text/video/agent responses, read results, recall past work, and manage nodes on [Flowith](https://beta.flowith.io)'s shared canvas.
 
 Your AI agent gets a live cursor on the canvas. It moves in real time — users see nodes appear and the tree grow.
 
@@ -45,7 +45,7 @@ bun $S recall "cyberpunk logo" --type image
 
 ## Requirements
 
-- A [Flowith](https://flowith.net) account with an active session in the browser
+- A [Flowith](https://beta.flowith.io) account with an active session in the browser
 - [Bun](https://bun.sh) runtime
 
 ## Documentation

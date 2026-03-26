@@ -143,7 +143,7 @@ function assertUUID(value: string, label: string) {
 // Resolve Flowith URL: env override or deployed preview
 async function detectFlowithUrl(): Promise<string> {
   if (process.env.FLOWITH_URL) return process.env.FLOWITH_URL
-  return "https://feat-canvas-skill.hypergpt-frontend.pages.dev"
+  return "https://beta.flowith.io"
 }
 let _flowithUrl: string | null = null
 async function getFlowithUrl(): Promise<string> {
@@ -1068,7 +1068,7 @@ async function connectAndExecute(
     try {
       await client.connect()
       await registerWithFrontend(client, session, userId, botClient)
-      if (!isParallel) {
+      if (!isParallel || channelName.startsWith("bot_ctrl:")) {
         await ensureBrowserConnected(client, session, userId, botClient)
       }
       if (!channelName.startsWith("bot_ctrl:") && !isParallel) {
@@ -1630,13 +1630,17 @@ async function main() {
 
   // ---- submit-batch: fire N submits over one connection ----
   if (cmd === "submit-batch") {
-    const { values: followFlag, rest: batchRest } = extractFlag(args.slice(1), "--follow")
+    const { values: followFlag, rest: batchRest0 } = extractFlag(args.slice(1), "--follow")
+    const { values: modesBatchFlag, rest: batchRest1 } = extractFlag(batchRest0, "--mode")
+    const { values: modelsBatchFlag, rest: batchRest } = extractFlag(batchRest1, "--models")
     const follow = followFlag[0]
     if (follow) assertUUID(follow, "follow nodeId")
+    const batchMode = modesBatchFlag[0] // e.g. "image"
+    const modelList = modelsBatchFlag[0]?.split(",") || [] // e.g. "gpt-image-1.5,seedream-v4.5"
     const prompts = batchRest.filter(a => !a.startsWith("--"))
     if (!prompts.length) {
       console.error(
-        'Error: submit-batch requires at least one prompt.\nUsage: submit-batch [--follow <nodeId>] "prompt1" "prompt2" ...',
+        'Error: submit-batch requires at least one prompt.\nUsage: submit-batch [--follow <nodeId>] [--mode <m>] [--models "m1,m2,..."] "prompt1" "prompt2" ...',
       )
       process.exit(1)
     }
@@ -1671,10 +1675,15 @@ async function main() {
         }) as BotAction
 
       for (let i = 0; i < prompts.length; i++) {
+        const perModel = modelList.length > 0
+          ? modelList[Math.min(i, modelList.length - 1)]
+          : undefined
         const submitAction = makeAction({
           type: "submit",
           value: prompts[i],
           ...(follow ? { follow } : {}),
+          ...(batchMode ? { mode: batchMode } : {}),
+          ...(perModel ? { model: perModel } : {}),
         })
         const resp = await sendAndWait(
           client,
@@ -2040,7 +2049,7 @@ async function main() {
                   actionId: action.actionId,
                   code: "NO_CREDITS",
                   message:
-                    "It looks like you've run out of credits. Visit /pricing to subscribe and keep creating: https://flowith.io/pricing",
+                    "It looks like you've run out of credits. Visit /pricing to subscribe and keep creating: https://beta.flowith.io/pricing",
                   data: data.node,
                 }),
               )
